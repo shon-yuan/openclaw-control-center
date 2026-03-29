@@ -51,6 +51,11 @@ import {
   type OpenClawSecuritySummary,
   type OpenClawUpdateSummary,
 } from "../runtime/openclaw-cli-insights";
+import {
+  listMemories,
+  getMemoryStats,
+  type MemoryEntryRow,
+} from "../runtime/lancedb-memory-reader";
 import { appendOperationAudit } from "../runtime/operation-audit";
 import { ApprovalActionService } from "../runtime/approval-action-service";
 import { buildActionQueueLinks } from "../runtime/action-queue-links";
@@ -1021,6 +1026,35 @@ export function startUiServer(port: number, toolClient: ToolClient): Server {
           ok: true,
           graph: buildLinkageGraph(snapshot),
         });
+      }
+
+      // LanceDB Memory API
+      if (method === "GET" && path === "/api/memory-lancedb") {
+        assertAllowedQueryParams(url.searchParams, ["category", "scope", "search", "limit", "offset"], true);
+        try {
+          const result = await listMemories({
+            category: url.searchParams.get("category") ?? undefined,
+            scope: url.searchParams.get("scope") ?? undefined,
+            search: url.searchParams.get("search") ?? undefined,
+            limit: url.searchParams.has("limit") ? Number(url.searchParams.get("limit")) : undefined,
+            offset: url.searchParams.has("offset") ? Number(url.searchParams.get("offset")) : undefined,
+          });
+          return writeJson(res, 200, { ok: true, ...result });
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return writeJson(res, 200, { ok: false, error: msg, entries: [], total: 0, categories: [], scopes: [] });
+        }
+      }
+
+      if (method === "GET" && path === "/api/memory-lancedb/stats") {
+        assertAllowedQueryParams(url.searchParams, [], true);
+        try {
+          const stats = await getMemoryStats();
+          return writeJson(res, 200, { ok: true, ...stats });
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return writeJson(res, 200, { ok: false, error: msg });
+        }
       }
 
       if (method === "GET" && path === "/view/pixel-state.json") {
@@ -6285,6 +6319,17 @@ async function renderHtml(
     </section>
   `;
   const memoryMainCount = memoryFiles.filter((entry) => entry.facetKey === "main").length;
+
+  // Fetch LanceDB memory stats for the section
+  let lancedbStats: Awaited<ReturnType<typeof getMemoryStats>> | null = null;
+  if (needsMemoryFiles) {
+    try {
+      lancedbStats = await getMemoryStats();
+    } catch {
+      // LanceDB not available, skip
+    }
+  }
+
   const memoryWorkbench = needsMemoryFiles
     ? await renderEditableFileWorkbench({
         scope: "memory",
@@ -6298,16 +6343,145 @@ async function renderHtml(
         facetOptions: memoryFacetOptions,
       })
     : "";
-  const memoryViewsLabel = joinDisplayList(["Main", ...memoryFacetOptions.filter((item) => item.key !== "main").map((item) => item.label)], options.language);
   const memorySection = `
-    <section class="card">
-      <h2>${escapeHtml(t("Memory overview", "记忆概览"))}</h2>
-      <div class="meta">Main ${escapeHtml(t("memories", "记忆"))} ${memoryMainCount} ${escapeHtml(t("files", "份"))} · ${escapeHtml(t("Agents found", "已发现智能体"))} ${Math.max(0, memoryFacetOptions.filter((item) => item.key !== "main").length)} ${escapeHtml(t("items", "个"))}</div>
-      <div class="meta">${escapeHtml(t("Available views", "可切换查看"))}${escapeHtml(options.language === "en" ? ": " : "：")}${escapeHtml(memoryViewsLabel)}</div>
-      <div class="meta">${escapeHtml(t("Only memory-related files are kept here: root MEMORY.md, memory/, and each agent's own MEMORY.md and memory/.", "这里只保留记忆相关文件：根目录 MEMORY.md、memory/，以及各智能体自己的 MEMORY.md 与 memory/。"))}</div>
-      <div class="meta">${escapeHtml(t("Edits here sync directly back to the real memory files on the OpenClaw machine.", "这里的编辑会直接同步到 OpenClaw 机器上的真实记忆文件。"))}</div>
+    ${lancedbStats && lancedbStats.tableExists ? `
+    <section class="card" id="lancedb-memory-card">
+      <h2>🧠 ${escapeHtml(t("LanceDB Memory (memory-lancedb-pro)", "LanceDB 向量记忆 (memory-lancedb-pro)"))}</h2>
+      <div class="meta">${escapeHtml(t("Total memories", "总记忆数"))}: <strong>${lancedbStats.total}</strong> · ${escapeHtml(t("Categories", "分类"))}: ${Object.entries(lancedbStats.byCategory).map(([k, v]) => `${k}(${v})`).join(", ")} · ${escapeHtml(t("Scopes", "范围"))}: ${Object.entries(lancedbStats.byScope).map(([k, v]) => `${k}(${v})`).join(", ")}</div>
+      <div class="lancedb-filters" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;align-items:center;">
+        <select id="lancedb-category-filter" class="lancedb-select">
+          <option value="all">${escapeHtml(t("All categories", "全部分类"))}</option>
+          ${Object.keys(lancedbStats.byCategory).map((c: string) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join("")}
+        </select>
+        <select id="lancedb-scope-filter" class="lancedb-select">
+          <option value="all">${escapeHtml(t("All scopes", "全部范围"))}</option>
+          ${Object.keys(lancedbStats.byScope).map((s: string) => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join("")}
+        </select>
+        <input id="lancedb-search" type="text" placeholder="${escapeHtml(t("Search memories...", "搜索记忆..."))}" class="lancedb-input" />
+        <button id="lancedb-search-btn" class="lancedb-btn">${escapeHtml(t("Search", "搜索"))}</button>
+      </div>
+      <div id="lancedb-memory-list" class="lancedb-list"></div>
+      <div id="lancedb-memory-pagination" class="lancedb-pagination"></div>
     </section>
-    ${memoryWorkbench}
+    <style>
+      .lancedb-select { padding:6px 10px;border:1px solid var(--border,#d1d5db);border-radius:6px;font-size:0.82em;background:var(--panel,#fff);color:var(--text,#374151);outline:none;transition:border-color .2s; }
+      .lancedb-select:focus { border-color:#818cf8; }
+      .lancedb-input { padding:6px 10px;border:1px solid var(--border,#d1d5db);border-radius:6px;font-size:0.82em;flex:1;min-width:150px;outline:none;background:var(--panel,#fff);color:var(--text,#374151);transition:border-color .2s; }
+      .lancedb-input:focus { border-color:#818cf8; }
+      .lancedb-btn { padding:6px 16px;background:#4f46e5;color:#fff;border:none;border-radius:6px;font-size:0.82em;cursor:pointer;transition:background .2s; }
+      .lancedb-btn:hover { background:#4338ca; }
+      .lancedb-list { margin-top:12px;display:grid;gap:6px;max-height:65vh;overflow-y:auto;padding-right:4px; }
+      .lancedb-list::-webkit-scrollbar { width:6px; }
+      .lancedb-list::-webkit-scrollbar-track { background:transparent; }
+      .lancedb-list::-webkit-scrollbar-thumb { background:var(--border,#d1d5db);border-radius:3px; }
+      .lancedb-entry { border-left:3px solid var(--border,#d1d5db);padding:10px 14px;background:var(--panel,#fff);border-radius:0 8px 8px 0;box-shadow:0 1px 2px rgba(0,0,0,0.04);transition:box-shadow .15s,border-color .15s; }
+      .lancedb-entry:hover { box-shadow:0 2px 6px rgba(0,0,0,0.08); }
+      .lancedb-entry-header { display:flex;align-items:center;gap:6px;margin-bottom:4px;flex-wrap:wrap; }
+      .lancedb-entry-tag { font-size:0.72em;padding:1px 7px;border-radius:10px;font-weight:600;letter-spacing:0.3px; }
+      .lancedb-entry-scope { font-size:0.72em;color:var(--muted,#9ca3af);background:var(--surface-3,#f3f4f6);padding:1px 7px;border-radius:10px; }
+      .lancedb-entry-meta { display:flex;justify-content:space-between;align-items:flex-start;gap:12px; }
+      .lancedb-entry-text { font-size:0.84em;color:var(--text,#1f2937);line-height:1.6;word-break:break-word;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;flex:1;cursor:pointer; }
+      .lancedb-entry-text.expanded { -webkit-line-clamp:unset; }
+      .lancedb-entry-right { flex-shrink:0;text-align:right;font-size:0.72em;color:var(--muted,#9ca3af);line-height:1.6; }
+      .lancedb-entry-importance { display:inline-block;background:linear-gradient(135deg,#fef3c7,#fde68a);color:#92400e;padding:1px 6px;border-radius:8px;font-weight:500; }
+      .lancedb-pagination { margin-top:12px;display:flex;gap:6px;align-items:center;font-size:0.82em;color:var(--muted,#6b7280); }
+      .lancedb-pagination button { padding:4px 10px;border:1px solid var(--border,#d1d5db);border-radius:6px;background:var(--panel,#fff);cursor:pointer;font-size:0.85em;color:var(--text,#374151);transition:all .15s; }
+      .lancedb-pagination button:hover:not(:disabled) { background:var(--surface-3,#f3f4f6);border-color:#818cf8; }
+      .lancedb-pagination button:disabled { opacity:.4;cursor:default; }
+      .lancedb-pagination .page-info { padding:0 6px; }
+      .lancedb-empty { text-align:center;padding:32px 16px;color:var(--muted,#9ca3af);font-size:0.88em; }
+      .lancedb-loading { text-align:center;padding:32px;color:var(--muted,#c7d2fe);font-size:0.88em; }
+      /* Dark mode overrides */
+      html[data-theme="dark"] .lancedb-entry { box-shadow:0 1px 4px rgba(0,0,0,0.3); }
+      html[data-theme="dark"] .lancedb-entry:hover { box-shadow:0 2px 8px rgba(0,0,0,0.4); }
+      html[data-theme="dark"] .lancedb-entry-tag { opacity:0.92; }
+      html[data-theme="dark"] .lancedb-entry-importance { background:linear-gradient(135deg,rgba(251,191,36,0.2),rgba(253,230,138,0.15));color:#fbbf24; }
+      html[data-theme="dark"] .lancedb-pagination button:hover:not(:disabled) { background:var(--surface-2); }
+    </style>
+    <script>
+    (function() {
+      function esc(s) { var d=document.createElement('div');d.textContent=s;return d.innerHTML; }
+      var listEl = document.getElementById('lancedb-memory-list');
+      var paginationEl = document.getElementById('lancedb-memory-pagination');
+      var catFilter = document.getElementById('lancedb-category-filter');
+      var scopeFilter = document.getElementById('lancedb-scope-filter');
+      var searchInput = document.getElementById('lancedb-search');
+      var searchBtn = document.getElementById('lancedb-search-btn');
+      var currentPage = 0;
+      var pageSize = 20;
+      var catEmoji = { preference:'⚙️', fact:'📌', decision:'✅', entity:'👤', reflection:'💭', other:'📝' };
+      var catBg = { preference:'#eef2ff', fact:'#ecfdf5', decision:'#fffbeb', entity:'#eff6ff', reflection:'#f5f3ff', other:'#f9fafb' };
+      var catColor = { preference:'#4f46e5', fact:'#059669', decision:'#d97706', entity:'#2563eb', reflection:'#7c3aed', other:'#6b7280' };
+
+      async function loadMemories() {
+        var params = new URLSearchParams();
+        if (catFilter.value !== 'all') params.set('category', catFilter.value);
+        if (scopeFilter.value !== 'all') params.set('scope', scopeFilter.value);
+        var q = searchInput.value.trim();
+        if (q) params.set('search', q);
+        params.set('limit', String(pageSize));
+        params.set('offset', String(currentPage * pageSize));
+        listEl.innerHTML = '<div class="lancedb-loading">加载中...</div>';
+        try {
+          var res = await fetch('/api/memory-lancedb?' + params.toString());
+          var data = await res.json();
+          if (!data.ok) { listEl.innerHTML = '<div class="lancedb-empty" style="color:#dc2626;">Error: ' + esc(data.error||'Unknown') + '</div>'; paginationEl.innerHTML=''; return; }
+          if (data.entries.length === 0) { listEl.innerHTML = '<div class="lancedb-empty">没有找到记忆</div>'; paginationEl.innerHTML=''; return; }
+          listEl.innerHTML = data.entries.map(function(e) {
+            var date = e.timestamp ? new Date(e.timestamp).toLocaleDateString('zh-CN',{month:'2-digit',day:'2-digit'}) + ' ' + new Date(e.timestamp).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'}) : '';
+            var emoji = catEmoji[e.category] || '📝';
+            var bg = catBg[e.category] || '#f9fafb';
+            var color = catColor[e.category] || '#6b7280';
+            var imp = Math.round((e.importance||0)*100);
+            var scopeShort = (e.scope||'global').replace('agent:','');
+            return '<div class="lancedb-entry" style="border-left-color:'+color+';">' +
+              '<div class="lancedb-entry-header">' +
+                '<span class="lancedb-entry-tag" style="background:'+bg+';color:'+color+';">'+emoji+' '+esc(e.category)+'</span>' +
+                '<span class="lancedb-entry-scope">'+esc(scopeShort)+'</span>' +
+              '</div>' +
+              '<div class="lancedb-entry-meta">' +
+                '<div class="lancedb-entry-text">'+esc(e.text)+'</div>' +
+                '<div class="lancedb-entry-right">' +
+                  '<div>'+date+'</div>' +
+                  '<div><span class="lancedb-entry-importance">⚡ '+imp+'%</span></div>' +
+                '</div>' +
+              '</div>' +
+            '</div>';
+          }).join('');
+          // Add click-to-expand
+          listEl.querySelectorAll('.lancedb-entry-text').forEach(function(el) {
+            el.addEventListener('click', function() { el.classList.toggle('expanded'); });
+            el.style.cursor = 'pointer';
+          });
+          var totalPages = Math.ceil(data.total / pageSize);
+          var ph = '<span>共 '+data.total+' 条</span>';
+          if (totalPages > 1) {
+            var btnStyle = function(dis) { return dis ? ' disabled' : ''; };
+            ph += '<button onclick="window._lp(0)"'+btnStyle(currentPage===0)+'>&laquo;</button>';
+            ph += '<button onclick="window._lp('+(currentPage-1)+')"'+btnStyle(currentPage===0)+'>&lsaquo;</button>';
+            ph += '<span class="page-info">'+(currentPage+1)+' / '+totalPages+'</span>';
+            ph += '<button onclick="window._lp('+(currentPage+1)+')"'+btnStyle(currentPage>=totalPages-1)+'>&rsaquo;</button>';
+            ph += '<button onclick="window._lp('+(totalPages-1)+')"'+btnStyle(currentPage>=totalPages-1)+'>&raquo;</button>';
+          }
+          paginationEl.innerHTML = ph;
+        } catch(err) {
+          listEl.innerHTML = '<div class="lancedb-empty" style="color:#dc2626;">加载失败: '+esc(String(err))+'</div>';
+        }
+      }
+      window._lp = function(p) { currentPage=p; loadMemories(); };
+      catFilter.addEventListener('change', function() { currentPage=0; loadMemories(); });
+      scopeFilter.addEventListener('change', function() { currentPage=0; loadMemories(); });
+      searchBtn.addEventListener('click', function() { currentPage=0; loadMemories(); });
+      searchInput.addEventListener('keydown', function(e) { if (e.key==='Enter') { currentPage=0; loadMemories(); } });
+      loadMemories();
+    })();
+    </script>
+    ` : (lancedbStats ? `
+    <section class="card">
+      <h2>🧠 ${escapeHtml(t("LanceDB Memory", "LanceDB 向量记忆"))}</h2>
+      <div class="meta" style="color:#f59e0b;">${escapeHtml(lancedbStats.dbExists && !lancedbStats.tableExists ? t("Database exists but memories table not found.", "数据库存在但未找到记忆表。") : t("LanceDB database not found. Ensure memory-lancedb-pro plugin is installed.", "未找到 LanceDB 数据库。请确认 memory-lancedb-pro 插件已安装。"))}</div>
+    </section>
+    ` : '')}
     ${memoryStateSection}
   `;
   const mainDocumentCount = workspaceFiles.filter((entry) => entry.facetKey === "main").length;
