@@ -115,7 +115,7 @@ Notes:
 - Each memory entry shows category pill tag, importance percentage, timestamp, and click-to-expand for long text.
 - Automatic dark/light theme adaptation via CSS variables.
 - Memory status card: displays per-agent memory health via `openclaw memory status`.
-- Requires [memory-lancedb-pro](https://clawhub.ai) plugin. Shows degraded notice when not installed.
+- Requires [memory-lancedb-pro](https://github.com/CortexReach/memory-lancedb-pro) plugin. Shows degraded notice when not installed.
 - API endpoints: `/api/memory-lancedb` (paginated query), `/api/memory-lancedb/stats` (aggregated stats).
 
 ### Documents

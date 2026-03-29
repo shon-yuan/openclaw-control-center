@@ -115,7 +115,7 @@ npm run dev:ui
 - 记忆条目显示分类标签、重要度百分比、时间戳，点击可展开全文。
 - 自动适配深色/浅色主题。
 - 记忆状态卡片：通过 `openclaw memory status` 展示各智能体记忆健康状态。
-- 依赖：需要安装 [memory-lancedb-pro](https://clawhub.ai) 插件。未安装时显示降级提示。
+- 依赖：需要安装 [memory-lancedb-pro](https://github.com/CortexReach/memory-lancedb-pro) 插件。未安装时显示降级提示。
 - API 端点：`/api/memory-lancedb`（分页查询）、`/api/memory-lancedb/stats`（统计信息）。
 
 ### 文档
