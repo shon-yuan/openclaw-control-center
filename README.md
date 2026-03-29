@@ -111,10 +111,12 @@ Notes:
 - Best when you want to understand “who passed this to whom, and where is the collaboration waiting now?”
 
 ### Memory
-- A source-backed workbench for daily and long-term memory files.
-- Scoped to active OpenClaw agents from `openclaw.json`, so deleted agents do not keep showing up.
-- Also shows whether each visible agent's memory is healthy, searchable, or needs attention.
-- Best when you want to inspect or edit memory that the current OpenClaw team is actually using.
+- **LanceDB vector memory browser** (memory-lancedb-pro integration): directly reads vector memories from LanceDB with category/scope filtering, full-text search, and pagination.
+- Each memory entry shows category pill tag, importance percentage, timestamp, and click-to-expand for long text.
+- Automatic dark/light theme adaptation via CSS variables.
+- Memory status card: displays per-agent memory health via `openclaw memory status`.
+- Requires [memory-lancedb-pro](https://clawhub.ai) plugin. Shows degraded notice when not installed.
+- API endpoints: `/api/memory-lancedb` (paginated query), `/api/memory-lancedb/stats` (aggregated stats).
 
 ### Documents
 - A source-backed workbench for shared and agent-specific core markdown docs.

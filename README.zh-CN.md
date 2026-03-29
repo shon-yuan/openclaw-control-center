@@ -111,10 +111,12 @@ npm run dev:ui
 - 最适合理解“这件事到底是谁转给了谁、现在卡在谁这里”。
 
 ### 记忆
-- 一个直接基于源文件的记忆工作台，用来查看和编辑每日记忆与长期记忆。
-- 范围跟随 `openclaw.json` 里的活跃 agent，不会把已删除 agent 继续显示出来。
-- 现在还会直接告诉你每个智能体的记忆是否正常、可搜索、是否需要检查。
-- 最适合查看或维护当前 OpenClaw 团队真实在用的记忆内容。
+- **LanceDB 向量记忆浏览**（memory-lancedb-pro 集成）：直接读取 LanceDB 中的向量记忆数据，支持按分类（preference/fact/decision/entity/reflection）和范围（scope）筛选，关键词搜索，分页浏览。
+- 记忆条目显示分类标签、重要度百分比、时间戳，点击可展开全文。
+- 自动适配深色/浅色主题。
+- 记忆状态卡片：通过 `openclaw memory status` 展示各智能体记忆健康状态。
+- 依赖：需要安装 [memory-lancedb-pro](https://clawhub.ai) 插件。未安装时显示降级提示。
+- API 端点：`/api/memory-lancedb`（分页查询）、`/api/memory-lancedb/stats`（统计信息）。
 
 ### 文档
 - 一个直接基于源文件的文档工作台，用来查看和编辑共享文档与 agent 核心文档。
